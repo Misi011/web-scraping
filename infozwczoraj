@@ -1,0 +1,109 @@
+from datetime import datetime, timedelta
+import requests
+from bs4 import BeautifulSoup
+from openpyxl import Workbook
+from sumy.parsers.plaintext import PlaintextParser
+from sumy.nlp.tokenizers import Tokenizer
+from sumy.summarizers.lsa import LsaSummarizer
+from deep_translator import GoogleTranslator
+import nltk
+
+nltk.download('punkt') 
+
+# Links with yesterday
+def get_links_for_yesterday():
+    yesterday = datetime.now() - timedelta(days=1)
+    yesterday_date = yesterday.strftime('%Y-%m-%d')
+
+    html_text = requests.get('https://www.deskmodder.de/blog/').text
+    soup = BeautifulSoup(html_text, 'lxml')
+
+    links_yesterday = []
+
+    # find all attributes from 'href', 'a'
+    all_links = soup.find_all('a', href=True)
+
+    # Extracting links with a given date
+    for link in all_links:
+        date_element = link.find('time', class_='entry-date published')
+
+        if date_element:
+            date_string = date_element['datetime']
+            date = datetime.fromisoformat(date_string[:19])
+
+            if date.strftime('%Y-%m-%d') == yesterday_date:
+                links_yesterday.append(link['href'])
+
+    return links_yesterday
+
+# download title and summary article
+def get_article_info(url):
+    article_info = {
+        'link': url,
+        'title': '',
+        'summary': ''
+    }
+
+    try:
+        article_html = requests.get(url).text
+        article_soup = BeautifulSoup(article_html, 'lxml')
+        article_info['title'] = article_soup.find('h1', class_='entry-title').text.strip()  
+        # download text from tag <article>
+        article_content = article_soup.find('article')
+        if article_content:
+            article_text = article_content.get_text(separator='\n').strip()
+
+            # Creating a summary using LSA summarization
+            LANGUAGE = "english"
+            parser = PlaintextParser.from_string(article_text, Tokenizer(LANGUAGE))
+            summarizer = LsaSummarizer()
+            summary = summarizer(parser.document, 3)  # Extracting two the most important sentence from article
+
+            article_info['summary'] = ' '.join(map(str, summary))
+            # translate the title article into Polish
+            translator_title = GoogleTranslator(source='de', target='pl')
+            translated_title = translator_title.translate(article_info['title'])
+            article_info['title'] = translated_title
+            
+            # translate summary into Polish
+            translator = GoogleTranslator(source='de', target='pl')
+            translated_summary = translator.translate(article_info['summary'])
+            article_info['summary'] = translated_summary
+            
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+    return article_info
+
+# save data to file excel
+def save_to_excel(articles, date):
+    date_string = datetime.strptime(date, '%Y-%m-%d').strftime('%Y-%m-%d')
+    
+    file_name = f'{date_string}_deskmodder_de.xlsx'
+    wb = Workbook()
+    ws = wb.active
+    ws.append(['Link', 'Tytuł artykułu', 'Streszczenie'])
+
+    for article in articles:
+        ws.append([article['link'], article['title'], article['summary']])
+
+    wb.save(file_name)
+    
+# function to get date yesterday
+def get_yesterday_date():
+    yesterday = datetime.now() - timedelta(days=1)
+    return yesterday.strftime('%Y-%m-%d')
+
+if __name__ == "__main__":
+    # get links from date yesterday
+    links = get_links_for_yesterday()
+
+    # get info about articles and summary
+    articles_info = [get_article_info(link) for link in links]
+
+    # get date yesterday to excel file
+    date = get_yesterday_date()
+
+    # Save data to excel file
+    save_to_excel(articles_info, date)
